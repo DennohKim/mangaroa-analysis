@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Slider } from '@/components/ui/slider';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 // Add type declarations
 declare global {
@@ -165,7 +166,7 @@ const generateMockData = () => {
 const VISUALIZATION_MODES = {
   current_year: {
     label: 'Current Year View',
-    description: 'Show canopy cover for selected year'
+    description: 'Show selected metric for the chosen year'
   },
   change_from_baseline: {
     label: 'Change from 2013',
@@ -177,7 +178,101 @@ const VISUALIZATION_MODES = {
   }
 } as const;
 
+const METRICS = {
+  canopy_cover: {
+    label: 'Canopy Cover',
+    unit: '%',
+    colorScale: [
+      { value: 0, color: '#ffffcc' },
+      { value: 25, color: '#a1dab4' },
+      { value: 50, color: '#41b6c4' },
+      { value: 75, color: '#2c7fb8' },
+      { value: 100, color: '#253494' }
+    ],
+    changeColorScale: [
+      { value: -50, color: '#d73027' },
+      { value: -25, color: '#fc8d59' },
+      { value: 0, color: '#ffffbf' },
+      { value: 25, color: '#91bfdb' },
+      { value: 50, color: '#4575b4' }
+    ]
+  },
+  tree_height: {
+    label: 'Tree Height',
+    unit: 'm',
+    colorScale: [
+      { value: 0, color: '#ffffcc' },
+      { value: 10, color: '#a1dab4' },
+      { value: 20, color: '#41b6c4' },
+      { value: 30, color: '#2c7fb8' },
+      { value: 40, color: '#253494' }
+    ],
+    changeColorScale: [
+      { value: -20, color: '#d73027' },
+      { value: -10, color: '#fc8d59' },
+      { value: 0, color: '#ffffbf' },
+      { value: 10, color: '#91bfdb' },
+      { value: 20, color: '#4575b4' }
+    ]
+  },
+  living_biomass: {
+    label: 'Living Biomass',
+    unit: 'kg/m²',
+    colorScale: [
+      { value: 0, color: '#ffffcc' },
+      { value: 50, color: '#a1dab4' },
+      { value: 100, color: '#41b6c4' },
+      { value: 150, color: '#2c7fb8' },
+      { value: 200, color: '#253494' }
+    ],
+    changeColorScale: [
+      { value: -100, color: '#d73027' },
+      { value: -50, color: '#fc8d59' },
+      { value: 0, color: '#ffffbf' },
+      { value: 50, color: '#91bfdb' },
+      { value: 100, color: '#4575b4' }
+    ]
+  },
+  carbon_stock: {
+    label: 'Carbon Stock',
+    unit: 'kg/m²',
+    colorScale: [
+      { value: 0, color: '#ffffcc' },
+      { value: 12.5, color: '#a1dab4' },
+      { value: 25, color: '#41b6c4' },
+      { value: 37.5, color: '#2c7fb8' },
+      { value: 50, color: '#253494' }
+    ],
+    changeColorScale: [
+      { value: -25, color: '#d73027' },
+      { value: -12.5, color: '#fc8d59' },
+      { value: 0, color: '#ffffbf' },
+      { value: 12.5, color: '#91bfdb' },
+      { value: 25, color: '#4575b4' }
+    ]
+  },
+  diversity_index: {
+    label: 'Diversity Index',
+    unit: '',
+    colorScale: [
+      { value: 0, color: '#ffffcc' },
+      { value: 0.25, color: '#a1dab4' },
+      { value: 0.5, color: '#41b6c4' },
+      { value: 0.75, color: '#2c7fb8' },
+      { value: 1, color: '#253494' }
+    ],
+    changeColorScale: [
+      { value: -0.5, color: '#d73027' },
+      { value: -0.25, color: '#fc8d59' },
+      { value: 0, color: '#ffffbf' },
+      { value: 0.25, color: '#91bfdb' },
+      { value: 0.5, color: '#4575b4' }
+    ]
+  }
+} as const;
+
 type VisualizationMode = keyof typeof VISUALIZATION_MODES;
+type Metric = keyof typeof METRICS;
 
 interface CanopyDataPoint {
   id: string;
@@ -208,6 +303,10 @@ interface PixelTrend {
   coordinates: [number, number];
   years: number[];
   values: number[];
+  trend_slope: number;
+  avg_value: number;
+  trend_direction: string;
+  [key: string]: number | string | [number, number] | number[]; // Allow dynamic metric properties
 }
 
 interface SavedMapState {
@@ -221,6 +320,7 @@ const CanopyCoverVisualizer = () => {
   const [isLoaded, setIsLoaded] = useState(false);
   const [selectedYear, setSelectedYear] = useState([2024]);
   const [visualizationMode, setVisualizationMode] = useState<VisualizationMode>('current_year');
+  const [selectedMetric, setSelectedMetric] = useState<Metric>('canopy_cover');
   const [opacity, setOpacity] = useState([80]);
   const [canopyData, setCanopyData] = useState<CanopyDataPoint[]>([]);
   const [dataStats, setDataStats] = useState<DataStats | null>(null);
@@ -348,8 +448,8 @@ const CanopyCoverVisualizer = () => {
           const baseline = baseline2013.find(b => b.pixel_id === current.pixel_id);
           return {
             ...current,
-            change_value: current.canopy_cover - (baseline?.canopy_cover || 0),
-            baseline_canopy: baseline?.canopy_cover || 0
+            change_value: current[selectedMetric] - (baseline?.[selectedMetric] || 0),
+            baseline_value: baseline?.[selectedMetric] || 0
           };
         });
         
@@ -365,11 +465,14 @@ const CanopyCoverVisualizer = () => {
               y: d.y, 
               coordinates: d.coordinates,
               years: [], 
-              values: [] 
+              values: [], 
+              trend_slope: 0,
+              avg_value: 0,
+              trend_direction: 'stable'
             };
           }
           pixelTrends[d.pixel_id].years.push(d.year);
-          pixelTrends[d.pixel_id].values.push(d.canopy_cover);
+          pixelTrends[d.pixel_id].values.push(d[selectedMetric]);
         });
         
         return Object.values(pixelTrends).map(trend => {
@@ -383,16 +486,17 @@ const CanopyCoverVisualizer = () => {
           const sumXX = trend.years.reduce((sum, year) => sum + year * year, 0);
           
           const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
-          const avgCanopy = sumY / n;
+          const avgValue = sumY / n;
           
-          return {
+          const result: PixelTrend = {
             ...trend,
             trend_slope: slope,
-            avg_canopy: avgCanopy,
-            canopy_cover: avgCanopy,
+            avg_value: avgValue,
             trend_direction: slope > 0.5 ? 'increasing' : slope < -0.5 ? 'decreasing' : 'stable'
           };
-        }).filter(Boolean);
+          result[selectedMetric] = avgValue;
+          return result;
+        }).filter((trend): trend is PixelTrend => trend !== null);
         
       default:
         return canopyData.filter(d => d.year === currentYear);
@@ -425,12 +529,12 @@ const CanopyCoverVisualizer = () => {
           properties: {
             pixel_id: point.pixel_id,
             year: isCanopyDataPoint ? point.year : selectedYear[0],
-            canopy_cover: point.canopy_cover,
+            [selectedMetric]: isCanopyDataPoint ? point[selectedMetric] : (point as any)[selectedMetric] || 0,
             change_value: isCanopyDataPoint ? 0 : (point as any).change_value || 0,
-            baseline_canopy: isCanopyDataPoint ? 0 : (point as any).baseline_canopy || 0,
+            baseline_value: isCanopyDataPoint ? 0 : (point as any).baseline_value || 0,
             trend_slope: isCanopyDataPoint ? 0 : (point as any).trend_slope || 0,
             trend_direction: isCanopyDataPoint ? 'stable' : (point as any).trend_direction || 'stable',
-            avg_canopy: isCanopyDataPoint ? point.canopy_cover : (point as any).avg_canopy || point.canopy_cover,
+            avg_value: isCanopyDataPoint ? point[selectedMetric] : (point as any).avg_value || point[selectedMetric],
             visualization_mode: visualizationMode,
             tree_height: isCanopyDataPoint ? point.tree_height : 0,
             living_biomass: isCanopyDataPoint ? point.living_biomass : 0,
@@ -471,27 +575,24 @@ const CanopyCoverVisualizer = () => {
       data: geoJSON
     });
 
-    // Color expressions based on visualization mode
+    // Color expressions based on visualization mode and selected metric
     let circleColor, heatmapWeight;
+    const metric = METRICS[selectedMetric];
     
     switch (visualizationMode) {
       case 'current_year':
         circleColor = [
           'interpolate',
           ['linear'],
-          ['get', 'canopy_cover'],
-          0, '#ffffcc',    // Light yellow for low canopy
-          25, '#a1dab4',   // Light green
-          50, '#41b6c4',   // Teal
-          75, '#2c7fb8',   // Blue
-          100, '#253494'   // Dark blue for high canopy
+          ['get', selectedMetric],
+          ...metric.colorScale.flatMap(scale => [scale.value, scale.color])
         ] as mapboxgl.Expression;
         heatmapWeight = [
           'interpolate',
           ['linear'],
-          ['get', 'canopy_cover'],
+          ['get', selectedMetric],
           0, 0,
-          100, 1
+          metric.colorScale[metric.colorScale.length - 1].value, 1
         ] as mapboxgl.Expression;
         break;
         
@@ -500,18 +601,14 @@ const CanopyCoverVisualizer = () => {
           'interpolate',
           ['linear'],
           ['get', 'change_value'],
-          -50, '#d73027',  // Red for big decrease
-          -25, '#fc8d59',  // Orange for decrease
-          0, '#ffffbf',    // Yellow for no change
-          25, '#91bfdb',   // Light blue for increase
-          50, '#4575b4'    // Blue for big increase
+          ...metric.changeColorScale.flatMap(scale => [scale.value, scale.color])
         ] as mapboxgl.Expression;
         heatmapWeight = [
           'interpolate',
           ['linear'],
           ['abs', ['get', 'change_value']],
           0, 0,
-          50, 1
+          Math.abs(metric.changeColorScale[metric.changeColorScale.length - 1].value), 1
         ] as mapboxgl.Expression;
         break;
         
@@ -593,22 +690,20 @@ const CanopyCoverVisualizer = () => {
       if (visualizationMode === 'current_year') {
         popupContent += `
           <p style="margin: 2px 0;"><strong>Year:</strong> ${props.year}</p>
-          <p style="margin: 2px 0;"><strong>Canopy Cover:</strong> ${props.canopy_cover.toFixed(2)}%</p>
-          <p style="margin: 2px 0;"><strong>Tree Height:</strong> ${props.tree_height.toFixed(1)}m</p>
-          <p style="margin: 2px 0;"><strong>Living Biomass:</strong> ${props.living_biomass.toFixed(1)} kg/m²</p>
+          <p style="margin: 2px 0;"><strong>${METRICS[selectedMetric].label}:</strong> ${(props[selectedMetric] || 0).toFixed(2)}${METRICS[selectedMetric].unit}</p>
         `;
       } else if (visualizationMode === 'change_from_baseline') {
         popupContent += `
           <p style="margin: 2px 0;"><strong>Current Year:</strong> ${props.year}</p>
-          <p style="margin: 2px 0;"><strong>Current Canopy:</strong> ${props.canopy_cover.toFixed(2)}%</p>
-          <p style="margin: 2px 0;"><strong>2013 Baseline:</strong> ${props.baseline_canopy.toFixed(2)}%</p>
-          <p style="margin: 2px 0; color: ${props.change_value > 0 ? '#22c55e' : props.change_value < 0 ? '#ef4444' : '#6b7280'};"><strong>Change:</strong> ${props.change_value > 0 ? '+' : ''}${props.change_value.toFixed(2)}%</p>
+          <p style="margin: 2px 0;"><strong>Current ${METRICS[selectedMetric].label}:</strong> ${(props[selectedMetric] || 0).toFixed(2)}${METRICS[selectedMetric].unit}</p>
+          <p style="margin: 2px 0;"><strong>2013 Baseline:</strong> ${(props.baseline_value || 0).toFixed(2)}${METRICS[selectedMetric].unit}</p>
+          <p style="margin: 2px 0; color: ${props.change_value > 0 ? '#22c55e' : props.change_value < 0 ? '#ef4444' : '#6b7280'};"><strong>Change:</strong> ${props.change_value > 0 ? '+' : ''}${(props.change_value || 0).toFixed(2)}${METRICS[selectedMetric].unit}</p>
         `;
       } else if (visualizationMode === 'trend_analysis') {
         popupContent += `
           <p style="margin: 2px 0;"><strong>12-Year Trend:</strong> <span style="color: ${props.trend_direction === 'increasing' ? '#22c55e' : props.trend_direction === 'decreasing' ? '#ef4444' : '#6b7280'}">${props.trend_direction}</span></p>
-          <p style="margin: 2px 0;"><strong>Avg Canopy:</strong> ${props.avg_canopy.toFixed(2)}%</p>
-          <p style="margin: 2px 0;"><strong>Annual Change:</strong> ${props.trend_slope > 0 ? '+' : ''}${props.trend_slope.toFixed(3)}%/year</p>
+          <p style="margin: 2px 0;"><strong>Avg ${METRICS[selectedMetric].label}:</strong> ${(props.avg_value || 0).toFixed(2)}${METRICS[selectedMetric].unit}</p>
+          <p style="margin: 2px 0;"><strong>Annual Change:</strong> ${props.trend_slope > 0 ? '+' : ''}${(props.trend_slope || 0).toFixed(3)}${METRICS[selectedMetric].unit}/year</p>
         `;
       }
       
@@ -637,7 +732,7 @@ const CanopyCoverVisualizer = () => {
     map.current.on('mouseenter', 'canopy-points' as any, handleMouseEnter);
     map.current.on('mouseleave', 'canopy-points' as any, handleMouseLeave);
 
-  }, [selectedYear, visualizationMode, opacity, isLoaded, canopyData, loading]);
+  }, [selectedYear, visualizationMode, selectedMetric, opacity, isLoaded, canopyData, loading]);
 
   // Animation controls
   const startAnimation = () => {
@@ -666,26 +761,98 @@ const CanopyCoverVisualizer = () => {
     setIsAnimating(false);
   };
 
+  // Calculate average values for each year for the selected metric
+  const calculateYearlyAverages = () => {
+    if (!canopyData.length) return [];
+
+    const yearlyData = new Map<number, { sum: number; count: number }>();
+    
+    canopyData.forEach(point => {
+      const year = point.year;
+      const value = point[selectedMetric];
+      
+      if (!yearlyData.has(year)) {
+        yearlyData.set(year, { sum: 0, count: 0 });
+      }
+      
+      const current = yearlyData.get(year)!;
+      current.sum += value;
+      current.count += 1;
+    });
+
+    return Array.from(yearlyData.entries())
+      .map(([year, data]) => ({
+        year,
+        value: data.sum / data.count
+      }))
+      .sort((a, b) => a.year - b.year);
+  };
+
   return (
     <div className="w-full h-screen relative">
       {/* Control Panel */}
       <div className="absolute top-4 left-4 z-10 bg-white p-4 rounded-lg shadow-lg min-w-96 max-h-[calc(100vh-2rem)] overflow-y-auto">
-        <h2 className="text-lg font-bold mb-4 text-gray-800">Mangaroa Canopy Cover Analysis</h2>
+        <h2 className="text-lg font-bold mb-4 text-gray-800">Mangaroa Zone 1 Analysis</h2>
         
-        {/* Data Status */}
-        {dataStats && (
-          <div className="mb-4 p-3 bg-green-50 rounded border border-green-200">
-            <h3 className="font-semibold text-green-800 mb-2">Real Data Loaded ✓</h3>
-            <div className="text-xs text-green-700">
-              <p>• {dataStats.totalRecords} total records</p>
-              <p>• {dataStats.uniquePixels} unique pixels</p>
-              <p>• Years: {dataStats.yearRange[0]} - {dataStats.yearRange[1]}</p>
-              <p>• Canopy range: {dataStats.canopyRange[0].toFixed(1)}% - {dataStats.canopyRange[1].toFixed(1)}%</p>
-              <p>• Average canopy: {dataStats.avgCanopy.toFixed(1)}%</p>
-            </div>
+        {/* Metric Selection */}
+        <div className="mb-4">
+          <label className="block text-sm font-medium mb-2 text-gray-700">Metric</label>
+          <select 
+            value={selectedMetric}
+            onChange={(e) => setSelectedMetric(e.target.value as Metric)}
+            className="w-full p-2 bg-white border border-gray-300 rounded text-gray-800"
+          >
+            {Object.entries(METRICS).map(([key, metric]) => (
+              <option key={key} value={key}>
+                {metric.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Trend Chart */}
+        <div className="mb-4">
+          <label className="block text-sm font-medium mb-2 text-gray-700">Trend Over Time</label>
+          <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart
+                data={calculateYearlyAverages()}
+                margin={{ top: 5, right: 5, left: 5, bottom: 5 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis 
+                  dataKey="year" 
+                  tick={{ fontSize: 12 }}
+                  label={{ value: 'Year', position: 'insideBottom', offset: -5 }}
+                />
+                <YAxis 
+                  tick={{ fontSize: 12 }}
+                  label={{ 
+                    value: METRICS[selectedMetric].label + (METRICS[selectedMetric].unit ? ` (${METRICS[selectedMetric].unit})` : ''),
+                    angle: -90,
+                    position: 'insideLeft',
+                    style: { textAnchor: 'middle' }
+                  }}
+                />
+                <Tooltip
+                  formatter={(value: number) => [value.toFixed(2) + METRICS[selectedMetric].unit, METRICS[selectedMetric].label]}
+                  labelFormatter={(year) => `Year: ${year}`}
+                />
+                <Legend />
+                <Line
+                  type="monotone"
+                  dataKey="value"
+                  name={METRICS[selectedMetric].label}
+                  stroke="#2563eb"
+                  strokeWidth={2}
+                  dot={{ r: 4 }}
+                  activeDot={{ r: 6 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
           </div>
-        )}
-        
+        </div>
+
         {/* Visualization Mode */}
         <div className="mb-4">
           <label className="block text-sm font-medium mb-2 text-gray-700">Visualization Mode</label>
@@ -770,65 +937,46 @@ const CanopyCoverVisualizer = () => {
           <div className="space-y-1">
             {visualizationMode === 'current_year' && (
               <>
-                <div className="flex items-center space-x-2">
-                  <div className="w-4 h-4 rounded" style={{ backgroundColor: '#ffffcc' }}></div>
-                  <span className="text-xs">Low Canopy (0-25%)</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-4 h-4 rounded" style={{ backgroundColor: '#a1dab4' }}></div>
-                  <span className="text-xs">Medium-Low (25-50%)</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-4 h-4 rounded" style={{ backgroundColor: '#41b6c4' }}></div>
-                  <span className="text-xs">Medium (50-75%)</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-4 h-4 rounded" style={{ backgroundColor: '#2c7fb8' }}></div>
-                  <span className="text-xs">High (75-90%)</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-4 h-4 rounded" style={{ backgroundColor: '#253494' }}></div>
-                  <span className="text-xs">Very High (90-100%)</span>
-                </div>
+                {METRICS[selectedMetric].colorScale.map((scale, index, array) => (
+                  <div key={index} className="flex items-center space-x-2">
+                    <div className="w-4 h-4 rounded" style={{ backgroundColor: scale.color }}></div>
+                    <span className="text-xs">
+                      {index === 0 ? 'Low' : index === array.length - 1 ? 'Very High' : 'Medium'} 
+                      ({scale.value}{METRICS[selectedMetric].unit})
+                    </span>
+                  </div>
+                ))}
               </>
             )}
             {visualizationMode === 'change_from_baseline' && (
               <>
-                <div className="flex items-center space-x-2">
-                  <div className="w-4 h-4 rounded" style={{ backgroundColor: '#d73027' }}></div>
-                  <span className="text-xs">Large Decrease (&lt;-25%)</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-4 h-4 rounded" style={{ backgroundColor: '#fc8d59' }}></div>
-                  <span className="text-xs">Moderate Decrease (-25% to 0%)</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-4 h-4 rounded" style={{ backgroundColor: '#ffffbf' }}></div>
-                  <span className="text-xs">No Change (0%)</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-4 h-4 rounded" style={{ backgroundColor: '#91bfdb' }}></div>
-                  <span className="text-xs">Moderate Increase (0% to 25%)</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-4 h-4 rounded" style={{ backgroundColor: '#4575b4' }}></div>
-                  <span className="text-xs">Large Increase (&gt;25%)</span>
-                </div>
+                {METRICS[selectedMetric].changeColorScale.map((scale, index, array) => (
+                  <div key={index} className="flex items-center space-x-2">
+                    <div className="w-4 h-4 rounded" style={{ backgroundColor: scale.color }}></div>
+                    <span className="text-xs">
+                      {index === 0 ? 'Large Decrease' : 
+                       index === 1 ? 'Moderate Decrease' :
+                       index === 2 ? 'No Change' :
+                       index === 3 ? 'Moderate Increase' : 'Large Increase'}
+                      ({scale.value}{METRICS[selectedMetric].unit})
+                    </span>
+                  </div>
+                ))}
               </>
             )}
             {visualizationMode === 'trend_analysis' && (
               <>
                 <div className="flex items-center space-x-2">
                   <div className="w-4 h-4 rounded" style={{ backgroundColor: '#2ca02c' }}></div>
-                  <span className="text-xs">Increasing Trend (&gt;+0.5%/year)</span>
+                  <span className="text-xs">Increasing Trend (&gt;+0.5{METRICS[selectedMetric].unit}/year)</span>
                 </div>
                 <div className="flex items-center space-x-2">
                   <div className="w-4 h-4 rounded" style={{ backgroundColor: '#1f77b4' }}></div>
-                  <span className="text-xs">Stable (-0.5% to +0.5%/year)</span>
+                  <span className="text-xs">Stable (-0.5 to +0.5{METRICS[selectedMetric].unit}/year)</span>
                 </div>
                 <div className="flex items-center space-x-2">
                   <div className="w-4 h-4 rounded" style={{ backgroundColor: '#d62728' }}></div>
-                  <span className="text-xs">Decreasing Trend (&lt;-0.5%/year)</span>
+                  <span className="text-xs">Decreasing Trend (&lt;-0.5{METRICS[selectedMetric].unit}/year)</span>
                 </div>
               </>
             )}
@@ -908,7 +1056,7 @@ const CanopyCoverVisualizer = () => {
       {/* Bottom Info Panel */}
       <div className="absolute bottom-4 right-4 bg-white bg-opacity-95 p-3 rounded-lg shadow-lg">
         <div className="text-xs text-gray-600">
-          <p className="font-medium">Canopy Cover Analysis</p>
+          <p className="font-medium">Mangaroa Analysis</p>
           <p>{VISUALIZATION_MODES[visualizationMode].label}</p>
           {visualizationMode !== 'trend_analysis' && <p>Year: {selectedYear[0]}</p>}
           {isAnimating && <p className="text-green-600">▶ Animating timeline...</p>}
