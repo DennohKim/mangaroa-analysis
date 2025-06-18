@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Slider } from '@/components/ui/slider';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ScatterChart, Scatter, ZAxis } from 'recharts';
 
 // Add type declarations
 declare global {
@@ -175,6 +175,10 @@ const VISUALIZATION_MODES = {
   trend_analysis: {
     label: 'Trend Analysis',
     description: 'Show overall trend (increase/decrease)'
+  },
+  correlation: {
+    label: 'Correlation Analysis',
+    description: 'Show relationships between metrics'
   }
 } as const;
 
@@ -327,6 +331,8 @@ const CanopyCoverVisualizer = () => {
   const [isAnimating, setIsAnimating] = useState(false);
   const [loading, setLoading] = useState(true);
   const animationRef = useRef<NodeJS.Timeout | null>(null);
+  const [selectedYearForCorrelation, setSelectedYearForCorrelation] = useState(2024);
+  const [selectedMetricsForCorrelation, setSelectedMetricsForCorrelation] = useState<[Metric, Metric]>(['canopy_cover', 'tree_height']);
 
   const years = [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024];
 
@@ -788,6 +794,36 @@ const CanopyCoverVisualizer = () => {
       .sort((a, b) => a.year - b.year);
   };
 
+  // Calculate correlation data for the selected year
+  const calculateCorrelationData = () => {
+    if (!canopyData.length) return [];
+
+    return canopyData
+      .filter(point => point.year === selectedYearForCorrelation)
+      .map(point => ({
+        x: point[selectedMetricsForCorrelation[0]],
+        y: point[selectedMetricsForCorrelation[1]],
+        pixel_id: point.pixel_id
+      }));
+  };
+
+  // Calculate correlation coefficient
+  const calculateCorrelation = (data: { x: number; y: number }[]) => {
+    if (data.length < 2) return 0;
+
+    const n = data.length;
+    const sumX = data.reduce((sum, point) => sum + point.x, 0);
+    const sumY = data.reduce((sum, point) => sum + point.y, 0);
+    const sumXY = data.reduce((sum, point) => sum + point.x * point.y, 0);
+    const sumX2 = data.reduce((sum, point) => sum + point.x * point.x, 0);
+    const sumY2 = data.reduce((sum, point) => sum + point.y * point.y, 0);
+
+    const numerator = n * sumXY - sumX * sumY;
+    const denominator = Math.sqrt((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY));
+
+    return denominator === 0 ? 0 : numerator / denominator;
+  };
+
   return (
     <div className="w-full h-screen relative">
       {/* Control Panel */}
@@ -810,49 +846,6 @@ const CanopyCoverVisualizer = () => {
           </select>
         </div>
 
-        {/* Trend Chart */}
-        <div className="mb-4">
-          <label className="block text-sm font-medium mb-2 text-gray-700">Trend Over Time</label>
-          <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart
-                data={calculateYearlyAverages()}
-                margin={{ top: 5, right: 5, left: 5, bottom: 5 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis 
-                  dataKey="year" 
-                  tick={{ fontSize: 12 }}
-                  label={{ value: 'Year', position: 'insideBottom', offset: -5 }}
-                />
-                <YAxis 
-                  tick={{ fontSize: 12 }}
-                  label={{ 
-                    value: METRICS[selectedMetric].label + (METRICS[selectedMetric].unit ? ` (${METRICS[selectedMetric].unit})` : ''),
-                    angle: -90,
-                    position: 'insideLeft',
-                    style: { textAnchor: 'middle' }
-                  }}
-                />
-                <Tooltip
-                  formatter={(value: number) => [value.toFixed(2) + METRICS[selectedMetric].unit, METRICS[selectedMetric].label]}
-                  labelFormatter={(year) => `Year: ${year}`}
-                />
-                <Legend />
-                <Line
-                  type="monotone"
-                  dataKey="value"
-                  name={METRICS[selectedMetric].label}
-                  stroke="#2563eb"
-                  strokeWidth={2}
-                  dot={{ r: 4 }}
-                  activeDot={{ r: 6 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
         {/* Visualization Mode */}
         <div className="mb-4">
           <label className="block text-sm font-medium mb-2 text-gray-700">Visualization Mode</label>
@@ -871,6 +864,158 @@ const CanopyCoverVisualizer = () => {
             {VISUALIZATION_MODES[visualizationMode].description}
           </p>
         </div>
+
+        {/* Correlation Analysis */}
+        {visualizationMode === 'correlation' && (
+          <div className="mb-4">
+            <div className="mb-4">
+              <label className="block text-sm font-medium mb-2 text-gray-700">Year</label>
+              <select
+                value={selectedYearForCorrelation}
+                onChange={(e) => setSelectedYearForCorrelation(Number(e.target.value))}
+                className="w-full p-2 bg-white border border-gray-300 rounded text-gray-800"
+              >
+                {years.map(year => (
+                  <option key={year} value={year}>{year}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="block text-sm font-medium mb-2 text-gray-700">X-Axis Metric</label>
+                <select
+                  value={selectedMetricsForCorrelation[0]}
+                  onChange={(e) => setSelectedMetricsForCorrelation([e.target.value as Metric, selectedMetricsForCorrelation[1]])}
+                  className="w-full p-2 bg-white border border-gray-300 rounded text-gray-800"
+                >
+                  {Object.entries(METRICS).map(([key, metric]) => (
+                    <option key={key} value={key}>
+                      {metric.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-2 text-gray-700">Y-Axis Metric</label>
+                <select
+                  value={selectedMetricsForCorrelation[1]}
+                  onChange={(e) => setSelectedMetricsForCorrelation([selectedMetricsForCorrelation[0], e.target.value as Metric])}
+                  className="w-full p-2 bg-white border border-gray-300 rounded text-gray-800"
+                >
+                  {Object.entries(METRICS).map(([key, metric]) => (
+                    <option key={key} value={key}>
+                      {metric.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="h-64 w-full mb-2">
+              <ResponsiveContainer width="100%" height="100%">
+                <ScatterChart
+                  margin={{ top: 20, right: 20, bottom: 20, left: 20 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis
+                    type="number"
+                    dataKey="x"
+                    name={METRICS[selectedMetricsForCorrelation[0]].label}
+                    unit={METRICS[selectedMetricsForCorrelation[0]].unit}
+                    label={{
+                      value: METRICS[selectedMetricsForCorrelation[0]].label + (METRICS[selectedMetricsForCorrelation[0]].unit ? ` (${METRICS[selectedMetricsForCorrelation[0]].unit})` : ''),
+                      position: 'insideBottom',
+                      offset: -5
+                    }}
+                  />
+                  <YAxis
+                    type="number"
+                    dataKey="y"
+                    name={METRICS[selectedMetricsForCorrelation[1]].label}
+                    unit={METRICS[selectedMetricsForCorrelation[1]].unit}
+                    label={{
+                      value: METRICS[selectedMetricsForCorrelation[1]].label + (METRICS[selectedMetricsForCorrelation[1]].unit ? ` (${METRICS[selectedMetricsForCorrelation[1]].unit})` : ''),
+                      angle: -90,
+                      position: 'insideLeft',
+                      style: { textAnchor: 'middle' }
+                    }}
+                  />
+                  <Tooltip
+                    formatter={(value: number, name: string) => [
+                      value.toFixed(2) + (name === 'x' ? METRICS[selectedMetricsForCorrelation[0]].unit : METRICS[selectedMetricsForCorrelation[1]].unit),
+                      name === 'x' ? METRICS[selectedMetricsForCorrelation[0]].label : METRICS[selectedMetricsForCorrelation[1]].label
+                    ]}
+                    labelFormatter={(label) => `Pixel ID: ${label}`}
+                  />
+                  <Scatter
+                    name="Correlation"
+                    data={calculateCorrelationData()}
+                    fill="#2563eb"
+                  />
+                </ScatterChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="text-sm text-gray-600">
+              <p className="font-medium">Correlation Analysis</p>
+              <p>Year: {selectedYearForCorrelation}</p>
+              <p>Correlation Coefficient: {calculateCorrelation(calculateCorrelationData()).toFixed(3)}</p>
+              <p className="text-xs mt-1">
+                {calculateCorrelation(calculateCorrelationData()) > 0.7 ? 'Strong positive correlation' :
+                 calculateCorrelation(calculateCorrelationData()) > 0.3 ? 'Moderate positive correlation' :
+                 calculateCorrelation(calculateCorrelationData()) > -0.3 ? 'Weak correlation' :
+                 calculateCorrelation(calculateCorrelationData()) > -0.7 ? 'Moderate negative correlation' :
+                 'Strong negative correlation'}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Trend Chart */}
+        {visualizationMode !== 'correlation' && (
+          <div className="mb-4">
+            <label className="block text-sm font-medium mb-2 text-gray-700">Trend Over Time</label>
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart
+                  data={calculateYearlyAverages()}
+                  margin={{ top: 5, right: 5, left: 5, bottom: 5 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis 
+                    dataKey="year" 
+                    tick={{ fontSize: 12 }}
+                    label={{ value: 'Year', position: 'insideBottom', offset: -5 }}
+                  />
+                  <YAxis 
+                    tick={{ fontSize: 12 }}
+                    label={{ 
+                      value: METRICS[selectedMetric].label + (METRICS[selectedMetric].unit ? ` (${METRICS[selectedMetric].unit})` : ''),
+                      angle: -90,
+                      position: 'insideLeft',
+                      style: { textAnchor: 'middle' }
+                    }}
+                  />
+                  <Tooltip
+                    formatter={(value: number) => [value.toFixed(2) + METRICS[selectedMetric].unit, METRICS[selectedMetric].label]}
+                    labelFormatter={(year) => `Year: ${year}`}
+                  />
+                  <Legend />
+                  <Line
+                    type="monotone"
+                    dataKey="value"
+                    name={METRICS[selectedMetric].label}
+                    stroke="#2563eb"
+                    strokeWidth={2}
+                    dot={{ r: 4 }}
+                    activeDot={{ r: 6 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        )}
 
         {/* Year Selection */}
         {visualizationMode !== 'trend_analysis' && (
