@@ -269,12 +269,12 @@ const processIOClassData = async (): Promise<IOClassDataPoint[]> => {
     
     baseData.forEach(pixel => {
       // Check if pixel has temporal changes
-      const classValues = years.map(year => pixel[`class_${year}` as keyof typeof pixel]);
+      const classValues = years.map(year => pixel[`class_${year}` as keyof typeof pixel] as number);
       const uniqueClasses = new Set(classValues);
       const hasTemporalChange = uniqueClasses.size > 1;
       
       years.forEach(year => {
-        const landClass = pixel[`class_${year}` as keyof typeof pixel];
+        const landClass = pixel[`class_${year}` as keyof typeof pixel] as number;
         
         timeSeriesData.push({
           id: `io_${pixel.x}_${pixel.y}_${year}`,
