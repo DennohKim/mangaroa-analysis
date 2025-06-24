@@ -15,11 +15,46 @@ declare global {
   }
 }
 
-// Process the actual Mangaroa canopy cover CSV data
-const processRealCanopyCoverData = async () => {
+// Dataset configuration
+const DATASETS = {
+  mangaroa: {
+    label: 'Mangaroa Canopy Cover',
+    description: 'Time-series canopy cover data (2013-2024)',
+    file: '/data/mangaroa_sampling_zone_1_kanop_screening_25_m.csv',
+    type: 'time_series'
+  },
+  glad: {
+    label: 'GLAD Forest Cover Loss/Gain',
+    description: 'Global forest change detection',
+    file: '/data/glad_forest_cover_loss_gain.csv',
+    type: 'forest_change'
+  },
+  io_class: {
+    label: 'IO-9 Land Use Classification',
+    description: 'Land use classification (2017-2023)',
+    file: '/data/io-9-class-10m.csv',
+    type: 'classification'
+  },
+  jrc_cover: {
+    label: 'JRC Forest Cover 2020',
+    description: 'European Commission forest cover',
+    file: '/data/jrc_forest_cover_2020.csv',
+    type: 'binary'
+  },
+  jrc_type: {
+    label: 'JRC Forest Type 2020',
+    description: 'European Commission forest type',
+    file: '/data/jrc_forest_type_2020.csv',
+    type: 'binary'
+  }
+} as const;
+
+type DatasetKey = keyof typeof DATASETS;
+
+// Process the Mangaroa canopy cover CSV data
+const processMangaroaData = async () => {
   try {
-    // Read the actual CSV file
-    console.log('Attempting to read CSV file...');
+    console.log('Loading Mangaroa dataset...');
     const response = await fetch('/data/mangaroa_sampling_zone_1_kanop_screening_25_m.csv');
     
     if (!response.ok) {
@@ -66,7 +101,8 @@ const processRealCanopyCoverData = async () => {
         tree_height: parseFloat(cleanRow.tree_height) || 0,
         living_biomass: parseFloat(cleanRow.living_biomass) || 0,
         carbon_stock: parseFloat(cleanRow.living_biomass_carbon_stock) || 0,
-        diversity_index: parseFloat(cleanRow.raos_q_diversity_index) || 0
+        diversity_index: parseFloat(cleanRow.raos_q_diversity_index) || 0,
+        dataset: 'mangaroa' as DatasetKey
       };
     }).filter(row => 
       // Filter out invalid data
@@ -85,20 +121,170 @@ const processRealCanopyCoverData = async () => {
       row.pixel_id = pixelMap.get(coordKey);
     });
 
-    console.log('Processed data summary:');
+    console.log('Processed Mangaroa data summary:');
     console.log('- Total records:', processedData.length);
     console.log('- Unique pixels:', pixelMap.size);
     console.log('- Year range:', Math.min(...processedData.map(d => d.year)), 'to', Math.max(...processedData.map(d => d.year)));
-    console.log('- Canopy cover range:', Math.min(...processedData.map(d => d.canopy_cover)), 'to', Math.max(...processedData.map(d => d.canopy_cover)));
-    console.log('- Sample processed record:', processedData[0]);
 
     return processedData;
   } catch (error) {
-    console.error('Error processing real canopy cover data:', error);
+    console.error('Error processing Mangaroa data:', error);
+    return [];
+  }
+};
+
+// Process GLAD forest cover loss/gain data
+const processGLADData = async () => {
+  try {
+    console.log('Loading GLAD dataset...');
+    const response = await fetch('/data/glad_forest_cover_loss_gain.csv');
+    const csvText = await response.text();
     
-    // Fallback to mock data if file loading fails
-    console.log('Falling back to mock data...');
-    return generateMockData();
+    const Papa = await import('papaparse');
+    const parsed = Papa.parse<Record<string, any>>(csvText, {
+      header: true,
+      dynamicTyping: true,
+      skipEmptyLines: true
+    });
+
+    const processedData = parsed.data.map((row: Record<string, any>, index) => ({
+      id: `glad_${row.x}_${row.y}`,
+      pixel_id: index,
+      x: parseFloat(row.x),
+      y: parseFloat(row.y),
+      coordinates: [parseFloat(row.x), parseFloat(row.y)] as [number, number],
+      datamask: parseInt(row.datamask),
+      gain: parseInt(row.gain),
+      lossyear: parseInt(row.lossyear),
+      treecover2000: parseInt(row.treecover2000),
+      has_data: parseInt(row.datamask) === 1,
+      has_forest_gain: parseInt(row.gain) === 1,
+      forest_loss_year: parseInt(row.lossyear) > 0 ? 2000 + parseInt(row.lossyear) : null,
+      baseline_tree_cover: parseInt(row.treecover2000),
+      dataset: 'glad' as DatasetKey
+    })).filter(row => 
+      !isNaN(row.x) && !isNaN(row.y) && row.has_data
+    );
+
+    console.log('Processed GLAD data:', processedData.length);
+    return processedData;
+  } catch (error) {
+    console.error('Error processing GLAD data:', error);
+    return [];
+  }
+};
+
+// Process IO-9-class land use classification data
+const processIOClassData = async () => {
+  try {
+    console.log('Loading IO-9-class dataset...');
+    const response = await fetch('/data/io-9-class-10m.csv');
+    const csvText = await response.text();
+    
+    const Papa = await import('papaparse');
+    const parsed = Papa.parse<Record<string, any>>(csvText, {
+      header: true,
+      dynamicTyping: true,
+      skipEmptyLines: true
+    });
+
+    const processedData = parsed.data.map((row: Record<string, any>, index) => ({
+      id: `io_${row.x}_${row.y}`,
+      pixel_id: index,
+      x: parseFloat(row.x),
+      y: parseFloat(row.y),
+      coordinates: [parseFloat(row.x), parseFloat(row.y)] as [number, number],
+      class_2017: parseInt(row.class_2017),
+      class_2018: parseInt(row.class_2018),
+      class_2019: parseInt(row.class_2019),
+      class_2020: parseInt(row.class_2020),
+      class_2021: parseInt(row.class_2021),
+      class_2022: parseInt(row.class_2022),
+      class_2023: parseInt(row.class_2023),
+      has_data: parseInt(row.class_2017) !== 255,
+      dominant_class: parseInt(row.class_2017), // Use 2017 as reference
+      dataset: 'io_class' as DatasetKey
+    })).filter(row => 
+      !isNaN(row.x) && !isNaN(row.y) && row.has_data
+    );
+
+    console.log('Processed IO-9-class data:', processedData.length);
+    return processedData;
+  } catch (error) {
+    console.error('Error processing IO-9-class data:', error);
+    return [];
+  }
+};
+
+// Process JRC forest cover data
+const processJRCCoverData = async () => {
+  try {
+    console.log('Loading JRC Forest Cover dataset...');
+    const response = await fetch('/data/jrc_forest_cover_2020.csv');
+    const csvText = await response.text();
+    
+    const Papa = await import('papaparse');
+    const parsed = Papa.parse<Record<string, any>>(csvText, {
+      header: true,
+      dynamicTyping: true,
+      skipEmptyLines: true
+    });
+
+    const processedData = parsed.data.map((row: Record<string, any>, index) => ({
+      id: `jrc_cover_${row.x}_${row.y}`,
+      pixel_id: index,
+      x: parseFloat(row.x),
+      y: parseFloat(row.y),
+      coordinates: [parseFloat(row.x), parseFloat(row.y)] as [number, number],
+      forest_cover_2020: parseInt(row.forest_cover_2020),
+      has_data: parseInt(row.forest_cover_2020) !== 255,
+      is_forest: parseInt(row.forest_cover_2020) === 0, // 0 = forest, 255 = no data
+      dataset: 'jrc_cover' as DatasetKey
+    })).filter(row => 
+      !isNaN(row.x) && !isNaN(row.y) && row.has_data
+    );
+
+    console.log('Processed JRC Forest Cover data:', processedData.length);
+    return processedData;
+  } catch (error) {
+    console.error('Error processing JRC Forest Cover data:', error);
+    return [];
+  }
+};
+
+// Process JRC forest type data
+const processJRCTypeData = async () => {
+  try {
+    console.log('Loading JRC Forest Type dataset...');
+    const response = await fetch('/data/jrc_forest_type_2020.csv');
+    const csvText = await response.text();
+    
+    const Papa = await import('papaparse');
+    const parsed = Papa.parse<Record<string, any>>(csvText, {
+      header: true,
+      dynamicTyping: true,
+      skipEmptyLines: true
+    });
+
+    const processedData = parsed.data.map((row: Record<string, any>, index) => ({
+      id: `jrc_type_${row.x}_${row.y}`,
+      pixel_id: index,
+      x: parseFloat(row.x),
+      y: parseFloat(row.y),
+      coordinates: [parseFloat(row.x), parseFloat(row.y)] as [number, number],
+      forest_type_2020: parseInt(row.forest_type_2020),
+      has_data: parseInt(row.forest_type_2020) !== 255,
+      is_forest: parseInt(row.forest_type_2020) === 0, // 0 = forest, 255 = no data
+      dataset: 'jrc_type' as DatasetKey
+    })).filter(row => 
+      !isNaN(row.x) && !isNaN(row.y) && row.has_data
+    );
+
+    console.log('Processed JRC Forest Type data:', processedData.length);
+    return processedData;
+  } catch (error) {
+    console.error('Error processing JRC Forest Type data:', error);
+    return [];
   }
 };
 
@@ -116,6 +302,7 @@ const generateMockData = () => {
     living_biomass: number;
     carbon_stock: number;
     diversity_index: number;
+    dataset: DatasetKey;
   }
 
   const mockData: MockDataPoint[] = [];
@@ -155,7 +342,8 @@ const generateMockData = () => {
         tree_height: Math.random() * 30,
         living_biomass: Math.random() * 200,
         carbon_stock: Math.random() * 50,
-        diversity_index: Math.random()
+        diversity_index: Math.random(),
+        dataset: 'mangaroa' as DatasetKey
       });
     });
   });
@@ -179,6 +367,18 @@ const VISUALIZATION_MODES = {
   correlation: {
     label: 'Correlation Analysis',
     description: 'Show relationships between metrics'
+  },
+  forest_change: {
+    label: 'Forest Change Detection',
+    description: 'Show forest loss/gain patterns'
+  },
+  classification: {
+    label: 'Land Use Classification',
+    description: 'Show land use categories'
+  },
+  binary_forest: {
+    label: 'Forest/Non-Forest',
+    description: 'Show binary forest classification'
   }
 } as const;
 
@@ -272,32 +472,98 @@ const METRICS = {
       { value: 0.25, color: '#91bfdb' },
       { value: 0.5, color: '#4575b4' }
     ]
+  },
+  forest_change: {
+    label: 'Forest Change',
+    unit: '',
+    colorScale: [
+      { value: 0, color: '#d73027' }, // Loss
+      { value: 1, color: '#ffffbf' }, // No change
+      { value: 2, color: '#4575b4' }  // Gain
+    ],
+    changeColorScale: []
+  },
+  land_class: {
+    label: 'Land Classification',
+    unit: '',
+    colorScale: [
+      { value: 0, color: '#fee5d9' },   // Class 0
+      { value: 11, color: '#2ca02c' },  // Forest (Class 11)
+      { value: 20, color: '#d62728' },  // Other classes
+    ],
+    changeColorScale: []
+  },
+  forest_binary: {
+    label: 'Forest Cover',
+    unit: '',
+    colorScale: [
+      { value: 0, color: '#2ca02c' }, // Forest
+      { value: 1, color: '#fee5d9' }  // Non-forest
+    ],
+    changeColorScale: []
   }
 } as const;
 
 type VisualizationMode = keyof typeof VISUALIZATION_MODES;
 type Metric = keyof typeof METRICS;
 
-interface CanopyDataPoint {
+interface BaseDataPoint {
   id: string;
   pixel_id: number;
   x: number;
   y: number;
+  coordinates: [number, number];
+  dataset: DatasetKey;
+}
+
+interface MangaroaDataPoint extends BaseDataPoint {
   year: number;
   canopy_cover: number;
-  coordinates: [number, number];
   tree_height: number;
   living_biomass: number;
   carbon_stock: number;
   diversity_index: number;
 }
 
+interface GLADDataPoint extends BaseDataPoint {
+  datamask: number;
+  gain: number;
+  lossyear: number;
+  treecover2000: number;
+  has_data: boolean;
+  has_forest_gain: boolean;
+  forest_loss_year: number | null;
+  baseline_tree_cover: number;
+}
+
+interface IOClassDataPoint extends BaseDataPoint {
+  class_2017: number;
+  class_2018: number;
+  class_2019: number;
+  class_2020: number;
+  class_2021: number;
+  class_2022: number;
+  class_2023: number;
+  has_data: boolean;
+  dominant_class: number;
+}
+
+interface JRCDataPoint extends BaseDataPoint {
+  forest_cover_2020?: number;
+  forest_type_2020?: number;
+  has_data: boolean;
+  is_forest: boolean;
+}
+
+type DataPoint = MangaroaDataPoint | GLADDataPoint | IOClassDataPoint | JRCDataPoint;
+
 interface DataStats {
   totalRecords: number;
   uniquePixels: number;
-  yearRange: [number, number];
-  canopyRange: [number, number];
-  avgCanopy: number;
+  yearRange?: [number, number];
+  canopyRange?: [number, number];
+  avgCanopy?: number;
+  datasetType: string;
 }
 
 interface PixelTrend {
@@ -322,11 +588,12 @@ const CanopyCoverVisualizer = () => {
   const mapContainer = useRef(null);
   const map = useRef<mapboxgl.Map | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [selectedDataset, setSelectedDataset] = useState<DatasetKey>('mangaroa');
   const [selectedYear, setSelectedYear] = useState([2024]);
   const [visualizationMode, setVisualizationMode] = useState<VisualizationMode>('current_year');
   const [selectedMetric, setSelectedMetric] = useState<Metric>('canopy_cover');
   const [opacity, setOpacity] = useState([80]);
-  const [canopyData, setCanopyData] = useState<CanopyDataPoint[]>([]);
+  const [canopyData, setCanopyData] = useState<DataPoint[]>([]);
   const [dataStats, setDataStats] = useState<DataStats | null>(null);
   const [isAnimating, setIsAnimating] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -335,6 +602,93 @@ const CanopyCoverVisualizer = () => {
   const [selectedMetricsForCorrelation, setSelectedMetricsForCorrelation] = useState<[Metric, Metric]>(['canopy_cover', 'tree_height']);
 
   const years = [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024];
+
+  // Load dataset based on selection
+  const loadDataset = async (datasetKey: DatasetKey) => {
+    setLoading(true);
+    try {
+      let data: DataPoint[] = [];
+      
+      switch (datasetKey) {
+        case 'mangaroa':
+          data = await processMangaroaData();
+          break;
+        case 'glad':
+          data = await processGLADData();
+          break;
+        case 'io_class':
+          data = await processIOClassData();
+          break;
+        case 'jrc_cover':
+          data = await processJRCCoverData();
+          break;
+        case 'jrc_type':
+          data = await processJRCTypeData();
+          break;
+        default:
+          data = generateMockData();
+      }
+
+      setCanopyData(data);
+      
+      // Calculate data statistics
+      const uniquePixels = new Set(data.map(d => d.pixel_id)).size;
+      
+      let stats: DataStats = {
+        totalRecords: data.length,
+        uniquePixels: uniquePixels,
+        datasetType: DATASETS[datasetKey].type
+      };
+
+      // Add time-series specific stats for Mangaroa data
+      if (datasetKey === 'mangaroa') {
+        const mangaroaData = data as MangaroaDataPoint[];
+        const uniqueYears = new Set(mangaroaData.map(d => d.year));
+        const canopyValues = mangaroaData.map(d => d.canopy_cover).filter(v => !isNaN(v));
+        
+        stats = {
+          ...stats,
+          yearRange: [Math.min(...uniqueYears), Math.max(...uniqueYears)],
+          canopyRange: [Math.min(...canopyValues), Math.max(...canopyValues)],
+          avgCanopy: canopyValues.reduce((a, b) => a + b, 0) / canopyValues.length
+        };
+      }
+      
+      setDataStats(stats);
+      
+    } catch (error) {
+      console.error('Error loading dataset:', error);
+      // Fallback to mock data
+      const mockData = generateMockData();
+      setCanopyData(mockData);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Update visualization mode based on dataset
+  useEffect(() => {
+    const datasetType = DATASETS[selectedDataset].type;
+    
+    switch (datasetType) {
+      case 'time_series':
+        setVisualizationMode('current_year');
+        setSelectedMetric('canopy_cover');
+        break;
+      case 'forest_change':
+        setVisualizationMode('forest_change');
+        setSelectedMetric('forest_change');
+        break;
+      case 'classification':
+        setVisualizationMode('classification');
+        setSelectedMetric('land_class');
+        break;
+      case 'binary':
+        setVisualizationMode('binary_forest');
+        setSelectedMetric('forest_binary');
+        break;
+    }
+  }, [selectedDataset]);
 
   // Initialize map
   useEffect(() => {
@@ -394,30 +748,9 @@ const CanopyCoverVisualizer = () => {
       mapInstance.on('load', async () => {
         console.log('Map loaded successfully');
         setIsLoaded(true);
-        setLoading(true);
         
-        try {
-          const data = await processRealCanopyCoverData();
-          setCanopyData(data);
-          
-          // Calculate data statistics
-          const uniquePixels = new Set(data.map(d => d.pixel_id)).size;
-          const uniqueYears = new Set(data.map(d => d.year));
-          const canopyValues = data.map(d => d.canopy_cover).filter(v => !isNaN(v));
-          
-          setDataStats({
-            totalRecords: data.length,
-            uniquePixels: uniquePixels,
-            yearRange: [Math.min(...uniqueYears), Math.max(...uniqueYears)],
-            canopyRange: [Math.min(...canopyValues), Math.max(...canopyValues)],
-            avgCanopy: canopyValues.reduce((a, b) => a + b, 0) / canopyValues.length
-          });
-          
-        } catch (error) {
-          console.error('Error loading canopy data:', error);
-        } finally {
-          setLoading(false);
-        }
+        // Load initial dataset
+        await loadDataset('mangaroa');
       });
 
       mapInstance.on('error', (e: { error: Error }) => {
@@ -436,6 +769,13 @@ const CanopyCoverVisualizer = () => {
     };
   }, []);
 
+  // Load new dataset when selection changes
+  useEffect(() => {
+    if (isLoaded) {
+      loadDataset(selectedDataset);
+    }
+  }, [selectedDataset, isLoaded]);
+
   // Process data based on visualization mode
   const processVisualizationData = () => {
     if (!canopyData.length) return [];
@@ -444,68 +784,134 @@ const CanopyCoverVisualizer = () => {
     
     switch (visualizationMode) {
       case 'current_year':
-        return canopyData.filter(d => d.year === currentYear);
+        // Only filter by year for time-series data
+        if (selectedDataset === 'mangaroa') {
+          return canopyData.filter(d => 'year' in d && d.year === currentYear);
+        }
+        return canopyData;
         
       case 'change_from_baseline':
-        const baseline2013 = canopyData.filter(d => d.year === 2013);
-        const currentYearData = canopyData.filter(d => d.year === currentYear);
-        
-        return currentYearData.map(current => {
-          const baseline = baseline2013.find(b => b.pixel_id === current.pixel_id);
-          return {
-            ...current,
-            change_value: current[selectedMetric] - (baseline?.[selectedMetric] || 0),
-            baseline_value: baseline?.[selectedMetric] || 0
-          };
-        });
+        if (selectedDataset === 'mangaroa') {
+          const mangaroaData = canopyData as MangaroaDataPoint[];
+          const baseline2013 = mangaroaData.filter(d => d.year === 2013);
+          const currentYearData = mangaroaData.filter(d => d.year === currentYear);
+          
+          return currentYearData.map(current => {
+            const baseline = baseline2013.find(b => b.pixel_id === current.pixel_id);
+            const metricKey = selectedMetric as keyof MangaroaDataPoint;
+            return {
+              ...current,
+              change_value: (current[metricKey] as number) - ((baseline?.[metricKey] as number) || 0),
+              baseline_value: (baseline?.[metricKey] as number) || 0
+            };
+          });
+        }
+        return canopyData;
         
       case 'trend_analysis':
-        const pixelTrends: Record<number, PixelTrend> = {};
+        if (selectedDataset === 'mangaroa') {
+          const mangaroaData = canopyData as MangaroaDataPoint[];
+          const pixelTrends: Record<number, PixelTrend> = {};
+          
+          // Calculate trend for each pixel
+          mangaroaData.forEach(d => {
+            if (!pixelTrends[d.pixel_id]) {
+              pixelTrends[d.pixel_id] = { 
+                pixel_id: d.pixel_id, 
+                x: d.x, 
+                y: d.y, 
+                coordinates: d.coordinates,
+                years: [], 
+                values: [], 
+                trend_slope: 0,
+                avg_value: 0,
+                trend_direction: 'stable'
+              };
+            }
+            pixelTrends[d.pixel_id].years.push(d.year);
+            const metricKey = selectedMetric as keyof MangaroaDataPoint;
+            pixelTrends[d.pixel_id].values.push(d[metricKey] as number);
+          });
         
-        // Calculate trend for each pixel
-        canopyData.forEach(d => {
-          if (!pixelTrends[d.pixel_id]) {
-            pixelTrends[d.pixel_id] = { 
-              pixel_id: d.pixel_id, 
-              x: d.x, 
-              y: d.y, 
-              coordinates: d.coordinates,
-              years: [], 
-              values: [], 
-              trend_slope: 0,
-              avg_value: 0,
-              trend_direction: 'stable'
+          return Object.values(pixelTrends).map(trend => {
+            // Simple linear trend calculation
+            const n = trend.years.length;
+            if (n < 2) return null;
+            
+            const sumX = trend.years.reduce((a, b) => a + b, 0);
+            const sumY = trend.values.reduce((a, b) => a + b, 0);
+            const sumXY = trend.years.reduce((sum, year, i) => sum + year * trend.values[i], 0);
+            const sumXX = trend.years.reduce((sum, year) => sum + year * year, 0);
+            
+            const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+            const avgValue = sumY / n;
+            
+            const result: PixelTrend = {
+              ...trend,
+              trend_slope: slope,
+              avg_value: avgValue,
+              trend_direction: slope > 0.5 ? 'increasing' : slope < -0.5 ? 'decreasing' : 'stable'
             };
-          }
-          pixelTrends[d.pixel_id].years.push(d.year);
-          pixelTrends[d.pixel_id].values.push(d[selectedMetric]);
-        });
-        
-        return Object.values(pixelTrends).map(trend => {
-          // Simple linear trend calculation
-          const n = trend.years.length;
-          if (n < 2) return null;
-          
-          const sumX = trend.years.reduce((a, b) => a + b, 0);
-          const sumY = trend.values.reduce((a, b) => a + b, 0);
-          const sumXY = trend.years.reduce((sum, year, i) => sum + year * trend.values[i], 0);
-          const sumXX = trend.years.reduce((sum, year) => sum + year * year, 0);
-          
-          const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
-          const avgValue = sumY / n;
-          
-          const result: PixelTrend = {
-            ...trend,
-            trend_slope: slope,
-            avg_value: avgValue,
-            trend_direction: slope > 0.5 ? 'increasing' : slope < -0.5 ? 'decreasing' : 'stable'
-          };
-          result[selectedMetric] = avgValue;
-          return result;
-        }).filter((trend): trend is PixelTrend => trend !== null);
+            result[selectedMetric] = avgValue;
+            return result;
+          }).filter((trend): trend is PixelTrend => trend !== null);
+        }
+        return canopyData;
         
       default:
-        return canopyData.filter(d => d.year === currentYear);
+        // Only filter by year for time-series data (Mangaroa)
+        if (selectedDataset === 'mangaroa') {
+          return canopyData.filter(d => 'year' in d && d.year === currentYear);
+        }
+        return canopyData;
+    }
+  };
+
+  // Helper function to safely get metric value from a data point
+  const getMetricValue = (point: DataPoint | PixelTrend, metric: Metric): number => {
+    switch (metric) {
+      case 'canopy_cover':
+        if ('canopy_cover' in point && typeof point.canopy_cover === 'number') {
+          return point.canopy_cover;
+        }
+        return 0;
+      case 'tree_height':
+        if ('tree_height' in point && typeof point.tree_height === 'number') {
+          return point.tree_height;
+        }
+        return 0;
+      case 'living_biomass':
+        if ('living_biomass' in point && typeof point.living_biomass === 'number') {
+          return point.living_biomass;
+        }
+        return 0;
+      case 'carbon_stock':
+        if ('carbon_stock' in point && typeof point.carbon_stock === 'number') {
+          return point.carbon_stock;
+        }
+        return 0;
+      case 'diversity_index':
+        if ('diversity_index' in point && typeof point.diversity_index === 'number') {
+          return point.diversity_index;
+        }
+        return 0;
+      case 'forest_change':
+        if ('has_forest_gain' in point && 'forest_loss_year' in point) {
+          return point.has_forest_gain ? 2 : point.forest_loss_year ? 0 : 1;
+        }
+        return 1;
+      case 'land_class':
+        if ('dominant_class' in point && typeof point.dominant_class === 'number') {
+          return point.dominant_class;
+        }
+        return 0;
+      case 'forest_binary':
+        if ('is_forest' in point && typeof point.is_forest === 'boolean') {
+          return point.is_forest ? 0 : 1;
+        }
+        return 1;
+      default:
+        return 0;
     }
   };
 
@@ -517,7 +923,8 @@ const CanopyCoverVisualizer = () => {
       type: 'FeatureCollection',
       features: data.map(point => {
         if (!point) return null;
-        const isCanopyDataPoint = 'year' in point;
+        const isMangaroaDataPoint = 'year' in point;
+        const isPixelTrend = 'trend_slope' in point;
         
         // Create a square polygon around the point (25m × 25m)
         const size = 0.00025; // increased from 0.000225 to eliminate gaps
@@ -530,21 +937,23 @@ const CanopyCoverVisualizer = () => {
           [lng - size/2, lat - size/2]
         ];
 
+        const metricValue = getMetricValue(point, selectedMetric);
+
         const feature: GeoJSON.Feature = {
           type: 'Feature',
           properties: {
             pixel_id: point.pixel_id,
-            year: isCanopyDataPoint ? point.year : selectedYear[0],
-            [selectedMetric]: isCanopyDataPoint ? point[selectedMetric] : (point as any)[selectedMetric] || 0,
-            change_value: isCanopyDataPoint ? 0 : (point as any).change_value || 0,
-            baseline_value: isCanopyDataPoint ? 0 : (point as any).baseline_value || 0,
-            trend_slope: isCanopyDataPoint ? 0 : (point as any).trend_slope || 0,
-            trend_direction: isCanopyDataPoint ? 'stable' : (point as any).trend_direction || 'stable',
-            avg_value: isCanopyDataPoint ? point[selectedMetric] : (point as any).avg_value || point[selectedMetric],
+            year: isMangaroaDataPoint ? point.year : selectedYear[0],
+            [selectedMetric]: metricValue,
+            change_value: 'change_value' in point ? point.change_value : 0,
+            baseline_value: 'baseline_value' in point ? point.baseline_value : 0,
+            trend_slope: isPixelTrend ? point.trend_slope : 0,
+            trend_direction: isPixelTrend ? point.trend_direction : 'stable',
+            avg_value: isPixelTrend ? point.avg_value : metricValue,
             visualization_mode: visualizationMode,
-            tree_height: isCanopyDataPoint ? point.tree_height : 0,
-            living_biomass: isCanopyDataPoint ? point.living_biomass : 0,
-            carbon_stock: isCanopyDataPoint ? point.carbon_stock : 0
+            tree_height: isMangaroaDataPoint ? point.tree_height : 0,
+            living_biomass: isMangaroaDataPoint ? point.living_biomass : 0,
+            carbon_stock: isMangaroaDataPoint ? point.carbon_stock : 0
           },
           geometry: {
             type: 'Polygon',
@@ -769,21 +1178,24 @@ const CanopyCoverVisualizer = () => {
 
   // Calculate average values for each year for the selected metric
   const calculateYearlyAverages = () => {
-    if (!canopyData.length) return [];
+    if (!canopyData.length || selectedDataset !== 'mangaroa') return [];
 
     const yearlyData = new Map<number, { sum: number; count: number }>();
     
     canopyData.forEach(point => {
-      const year = point.year;
-      const value = point[selectedMetric];
-      
-      if (!yearlyData.has(year)) {
-        yearlyData.set(year, { sum: 0, count: 0 });
+      // Only process Mangaroa data points that have year property
+      if ('year' in point && typeof point.year === 'number') {
+        const year = point.year;
+        const value = getMetricValue(point, selectedMetric);
+        
+        if (!yearlyData.has(year)) {
+          yearlyData.set(year, { sum: 0, count: 0 });
+        }
+        
+        const current = yearlyData.get(year)!;
+        current.sum += value;
+        current.count += 1;
       }
-      
-      const current = yearlyData.get(year)!;
-      current.sum += value;
-      current.count += 1;
     });
 
     return Array.from(yearlyData.entries())
@@ -796,13 +1208,13 @@ const CanopyCoverVisualizer = () => {
 
   // Calculate correlation data for the selected year
   const calculateCorrelationData = () => {
-    if (!canopyData.length) return [];
+    if (!canopyData.length || selectedDataset !== 'mangaroa') return [];
 
     return canopyData
-      .filter(point => point.year === selectedYearForCorrelation)
+      .filter(point => 'year' in point && point.year === selectedYearForCorrelation)
       .map(point => ({
-        x: point[selectedMetricsForCorrelation[0]],
-        y: point[selectedMetricsForCorrelation[1]],
+        x: getMetricValue(point, selectedMetricsForCorrelation[0]),
+        y: getMetricValue(point, selectedMetricsForCorrelation[1]),
         pixel_id: point.pixel_id
       }));
   };
